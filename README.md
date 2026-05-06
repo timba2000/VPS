@@ -5,6 +5,7 @@ Small, focused projects in TypeScript and Python. Each sample is a real working 
 ## Samples
 
 - [`samples/csv-clean`](samples/csv-clean) — Python CLI for cleaning messy CSV files: trims whitespace, drops empty rows/columns, dedupes, normalizes headers. Uses pandas. Tested with pytest.
+- [`samples/ts-bug-fix`](samples/ts-bug-fix) — TypeScript worked example of fixing a classic async `forEach` bug. Buggy and fixed versions side-by-side, with a regression test that pins both behaviors. Uses vitest.
 
 More on the way.
 
