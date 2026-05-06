@@ -1,0 +1,4 @@
+first_name,last_name,email_address,notes
+Alice,Smith,alice@example.com,VIP customer
+Bob,Jones,bob@example.com,
+Carol,Doe,carol@example.com,Repeat: prefers email

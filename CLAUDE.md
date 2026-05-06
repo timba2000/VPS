@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A personal workspace for timba2000's ongoing collaboration with Claude Code. Despite the `VPS` name, this is **not** infrastructure / server provisioning code — the name is incidental. Don't assume Bash/Ansible/Terraform conventions just because of the directory name.
+A dual-purpose repo for timba2000:
+
+1. **Public face**: a portfolio of TypeScript and Python code samples (`samples/`) that buyers on Fiverr/GitHub see when they click the GitHub profile.
+2. **Workspace**: a place for ongoing collaboration with Claude Code on the freelance/bounty work itself.
+
+Despite the `VPS` name, this is **not** infrastructure / server provisioning code — the name is incidental. Don't assume Bash/Ansible/Terraform conventions just because of the directory name.
+
+**Stacks in scope:** TypeScript and Python only (see memory `feedback_languages.md`). Don't author Rust/Go/Scala/etc. work under this account.
 
 When you start a new session here:
 
