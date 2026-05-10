@@ -19,12 +19,18 @@ When you start a new session here:
 2. Check `/root/.claude/projects/-root/memory/MEMORY.md` for accumulated context about the user and prior decisions.
 3. If the repo's purpose has clearly evolved (a real subject has taken shape — a project, a script collection, notes, etc.), update this file rather than letting it drift.
 
-## Current state (2026-05-06)
+## Current state (2026-05-10)
 
-- No commits yet. No source files yet. The subject of work has not been introduced.
-- Remote: `git@github.com:timba2000/VPS.git` (exists on GitHub, also empty).
-- The local SSH key at `~/.ssh/id_ed25519.pub` is **not** registered with GitHub. Pushing will fail until the user adds it. Don't attempt `git push` without flagging this first.
+Layout:
+
+- `samples/` — public portfolio. `csv-clean` (Python) and `ts-bug-fix` (TypeScript).
+- `projects/` — active work.
+- `ops/` — local-only, not tracked.
+
+Active project: **`projects/fwc-super-scraper`** (Python). Builds a queryable SQLite dataset of default-super funds named in active Australian enterprise agreements, sourced from the Fair Work Commission. Pipeline is crawl → enrich → download → extract; each stage idempotent and resumable from `data/fwc.sqlite`. Entry point: `bash scripts/run_pilot.sh` (1,000-row pilot). Long pilot runs should be launched detached (`nohup setsid bash scripts/run_pilot.sh </dev/null >/dev/null 2>&1 &`) so they survive session disconnects. See `projects/fwc-super-scraper/README.md` for full pipeline + schema.
+
+Remote `git@github.com:timba2000/VPS.git` is working — SSH key is registered, `main` pushes cleanly.
 
 ## Conventions
 
-None yet. When the user establishes one (file layout, naming, language choice, commit style), record it here so the next session inherits it.
+None established yet. Record here when the user sets one (file layout, naming, commit style).
