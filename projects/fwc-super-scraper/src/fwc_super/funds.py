@@ -3,7 +3,7 @@
 Each fund has a canonical name plus aliases (variations as commonly written in
 enterprise agreements). The matcher uses rapidfuzz for token-set matching with a
 high threshold to avoid false positives, and requires word-boundary matches so
-short acronyms like "ART" don't fire on words like "depART-ment".
+short acronyms don't fire on substrings inside longer words.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class Fund:
 FUNDS: tuple[Fund, ...] = (
     Fund("AustralianSuper", ("AustralianSuper", "Australian Super", "ASUPER")),
     Fund("Australian Retirement Trust", (
-        "Australian Retirement Trust", "ART", "Sunsuper", "QSuper",
+        "Australian Retirement Trust", "Sunsuper", "QSuper",
     )),
     Fund("Aware Super", ("Aware Super", "First State Super", "FSS", "VicSuper")),
     Fund("Cbus", ("Cbus", "C-Bus", "Construction and Building Unions Super")),
@@ -41,7 +41,10 @@ FUNDS: tuple[Fund, ...] = (
     Fund("Mercer Super Trust", ("Mercer Super", "Mercer Superannuation", "Mercer Super Trust")),
     Fund("Russell Investments Master Trust", ("Russell Investments Master Trust", "Russell Super")),
     Fund("NGS Super", ("NGS Super", "Non-Government Schools Super")),
-    Fund("TWUSUPER", ("TWUSUPER", "TWU Super", "Transport Workers' Union Super")),
+    Fund("TWUSUPER", (
+        "TWUSUPER", "TWU Super", "Transport Workers' Union Super",
+        "Transport Workers Union Super", "Transport Workers Super",
+    )),
     Fund("AMIST Super", ("AMIST Super", "AMIST")),
     Fund("First Super", ("First Super",)),
     Fund("Spirit Super", ("Spirit Super", "Tasplan", "MTAA Super")),
@@ -53,7 +56,38 @@ FUNDS: tuple[Fund, ...] = (
     Fund("ESSSuper", ("ESSSuper", "ESS Super", "Emergency Services Super")),
     Fund("GESB", ("GESB", "Government Employees Superannuation Board")),
     Fund("Catholic Super", ("Catholic Super", "CSF", "Catholic Superannuation Fund")),
+    Fund("AMP Super", (
+        "AMP Super", "AMP Superannuation", "AMP SignatureSuper",
+        "AMP Flexible Super", "AMP Retirement Trust",
+    )),
+    Fund("Commonwealth Superannuation Corporation", (
+        "Commonwealth Superannuation Corporation",
+        "PSSap", "MilitarySuper", "ADF Super",
+    )),
+    Fund("Team Super", ("Team Super", "TEAMSUPER", "TeamSuper")),
+    Fund("MLC Super", (
+        "MLC Super", "MLC Superannuation", "MLC Superannuation Fund",
+        "MLC MasterKey", "MLC MasterKey Super",
+    )),
+    Fund("Plum Super", (
+        "Plum Super", "Plum Superannuation", "Plum Superannuation Fund",
+    )),
+    Fund("Brighter Super", ("Brighter Super", "LGIAsuper", "LGIA Super")),
+    Fund("Energy Super", ("Energy Super", "Energy Super Plan")),
 )
+
+
+def _punctuation_variants(alias: str) -> set[str]:
+    # When an alias contains "+" or "-", also accept the other punctuation and a
+    # bare space — catches OCR/typesetting variants like "C+BUS" or "Host Plus"
+    # without having to enumerate them by hand.
+    if "+" not in alias and "-" not in alias:
+        return {alias}
+    return (
+        {alias}
+        | {re.sub(r"[+\-]", sep, alias) for sep in "+-"}
+        | {re.sub(r"[+\-]", " ", alias)}
+    )
 
 
 # Build flat alias → canonical lookup. Keys preserve original casing; matching
@@ -61,7 +95,8 @@ FUNDS: tuple[Fund, ...] = (
 _ALIAS_TO_CANONICAL: dict[str, str] = {}
 for f in FUNDS:
     for alias in f.aliases:
-        _ALIAS_TO_CANONICAL[alias] = f.canonical
+        for variant in _punctuation_variants(alias):
+            _ALIAS_TO_CANONICAL[variant] = f.canonical
 
 
 # Aliases shorter than this need a hard word-boundary match (no fuzzy).
@@ -69,8 +104,8 @@ _STRICT_ALIAS_MAX_LEN = 6
 
 
 def _word_boundary_re(alias: str) -> re.Pattern[str]:
-    # Pattern that requires non-alphanumeric on both sides, so "ART" won't match
-    # "depART-ment". For aliases ending in a digit (none currently) \b is fine.
+    # Pattern that requires non-alphanumeric on both sides, so short aliases
+    # don't match substrings inside longer words.
     return re.compile(r"(?<![A-Za-z0-9])" + re.escape(alias) + r"(?![A-Za-z0-9])", re.I)
 
 
@@ -80,11 +115,24 @@ _BOUNDARY_PATTERNS: dict[str, re.Pattern[str]] = {
 
 
 _OCR_SPLIT_TAIL = re.compile(r"\b([A-Z]{3,})\s+([A-Z])\b")
+_INTRA_WORD_SPLIT = re.compile(r"\b([A-Za-z]{2,})\s([A-Za-z]{2,})\b")
+_ALIAS_LC: frozenset[str] = frozenset(a.lower() for a in _ALIAS_TO_CANONICAL)
+
+
+def _maybe_rejoin(match: re.Match[str]) -> str:
+    # Only collapse a space-split pair when the merged form is a known alias —
+    # avoids accidentally welding ordinary adjacent words.
+    merged = match.group(1) + match.group(2)
+    if merged.lower() in _ALIAS_LC:
+        return merged
+    return match.group(0)
 
 
 def _normalise(text: str) -> str:
-    """Repair common OCR splits like "HEST A" -> "HESTA"."""
-    return _OCR_SPLIT_TAIL.sub(r"\1\2", text)
+    """Repair common OCR splits like "HEST A" -> "HESTA" and "MyS uper" -> "MySuper"."""
+    text = _OCR_SPLIT_TAIL.sub(r"\1\2", text)
+    text = _INTRA_WORD_SPLIT.sub(_maybe_rejoin, text)
+    return text
 
 
 def find_funds(text: str, *, threshold: int = 95) -> list[tuple[str, str, int]]:

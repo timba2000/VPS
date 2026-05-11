@@ -66,12 +66,38 @@ TERM_PHRASES = re.compile(
 )
 
 
+_HEADING_LIKE = re.compile(r"(?m)^[A-Z0-9][A-Z0-9 \-,&/().]{4,80}$")
+
+
+def _looks_like_toc(window: str) -> bool:
+    lines = [l for l in window.splitlines() if l.strip()]
+    if len(lines) < 6:
+        return False
+    headings = sum(1 for l in lines if _HEADING_LIKE.match(l.strip()))
+    return headings / len(lines) >= 0.5
+
+
 def _section(text: str, start: re.Pattern, *, length: int = 1500) -> str | None:
-    """Return text following the first match of `start`, up to `length` chars."""
-    m = start.search(text)
-    if not m:
+    """Return text following the first match of `start`, up to `length` chars.
+
+    If the first match falls in the first ~10% of the document and the captured
+    window looks like a table of contents (mostly heading-style ALL-CAPS lines),
+    advance to the next match — the real clause is later in the body.
+    """
+    matches = list(start.finditer(text))
+    if not matches:
         return None
-    return text[m.start(): m.start() + length]
+    first = matches[0]
+    early_cutoff = max(2000, len(text) // 10)
+    if (
+        first.start() < early_cutoff
+        and len(matches) > 1
+        and _looks_like_toc(text[first.start(): first.start() + length])
+    ):
+        chosen = matches[1]
+    else:
+        chosen = first
+    return text[chosen.start(): chosen.start() + length]
 
 
 # ---------- Heuristic extractors ---------------------------------------------
@@ -93,6 +119,28 @@ class Extracted:
     # (name, title, side, excerpt)
     signer_confidence: str = "low"
     ocr: bool = False
+    no_default_named: bool = False
+
+
+# Phrases used in stapling-era / employee-choice EAs that legitimately do not
+# name a default fund. Case-insensitive substring match.
+NO_DEFAULT_PHRASES = (
+    "stapled fund",
+    "stapled super",
+    "fund nominated by the employee",
+    "fund nominated by the employer",
+    "fund of the employee's choice",
+    "fund of the employees' choice",
+    "complying fund of the employee",
+    "complying superannuation fund nominated",
+    "in accordance with the choice of fund",
+    "in accordance with the superannuation guarantee",
+)
+
+
+def _no_default_named(text: str) -> bool:
+    low = text.lower()
+    return any(p in low for p in NO_DEFAULT_PHRASES)
 
 
 def _extract_super(text: str) -> tuple[list[tuple[str, str]], str | None, str]:
@@ -217,15 +265,35 @@ def _extract_signatories(text: str) -> tuple[list[tuple[str, str | None, str | N
     return out, confidence
 
 
+def _needs_ocr(per_page_lengths: list[int]) -> bool:
+    """Per-page heuristic: an EA looks scanned when most pages have very little
+    extractable text. Beats the old global 200-char guard, which let multi-page
+    scans through if their TOC + page numbers totalled enough chars.
+    """
+    if not per_page_lengths:
+        return True
+    n = len(per_page_lengths)
+    sorted_lens = sorted(per_page_lengths)
+    median = sorted_lens[n // 2]
+    near_empty = sum(1 for x in per_page_lengths if x < 50)
+    return median < 400 or near_empty / n > 0.8
+
+
 def extract_pdf(pdf_path: Path | str, *, fallback_end: dt.date | None = None) -> Extracted:
     pdf_path = Path(pdf_path)
     with pdfplumber.open(pdf_path) as pdf:
-        text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+        page_texts = [(p.extract_text() or "") for p in pdf.pages]
+    text = "\n".join(page_texts)
+    page_lengths = [len(t) for t in page_texts]
     e = Extracted(ocr=False)
-    if len(text.strip()) < 200:
-        e.ocr = True  # caller may invoke OCR; not implemented in v0
+    if _needs_ocr(page_lengths):
+        e.ocr = True  # caller may invoke OCR; see scripts/ocr_pipeline.py
         return e
     e.default_super, e.super_excerpt, e.super_confidence = _extract_super(text)
+    if not e.default_super:
+        # Look in the super section first (if any), then the whole doc
+        scan = e.super_excerpt or text
+        e.no_default_named = _no_default_named(scan)
     e.term_start, e.term_end, e.term_excerpt, e.term_confidence = _extract_term(
         text, fallback_end=fallback_end
     )
@@ -259,16 +327,17 @@ def extract(db_path: str | None = None, *, limit: int | None = None) -> Iterator
         now = dt.datetime.utcnow().isoformat(timespec="seconds")
         conn.execute(
             """INSERT OR REPLACE INTO extraction
-               (ae_id, date_signed, term_start, term_end, ocr,
+               (ae_id, date_signed, term_start, term_end, ocr, no_default_named,
                 confidence_super, confidence_signed, confidence_term, confidence_signer,
                 raw_super_excerpt, raw_signed_excerpt, raw_signer_excerpt, extracted_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 ae_id,
                 e.date_signed.isoformat() if e.date_signed else None,
                 e.term_start.isoformat() if e.term_start else None,
                 e.term_end.isoformat() if e.term_end else None,
                 int(e.ocr),
+                int(e.no_default_named),
                 e.super_confidence,
                 e.signed_confidence,
                 e.term_confidence,

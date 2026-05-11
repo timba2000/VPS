@@ -183,16 +183,30 @@ def cmd_stats() -> None:
     n_pdf = conn.execute("SELECT COUNT(*) FROM agreements WHERE pdf_path IS NOT NULL").fetchone()[0]
     n_ext = conn.execute("SELECT COUNT(*) FROM extraction").fetchone()[0]
     n_super = conn.execute("SELECT COUNT(DISTINCT ae_id) FROM default_super").fetchone()[0]
+    n_no_default = conn.execute(
+        "SELECT COUNT(*) FROM extraction WHERE no_default_named = 1"
+    ).fetchone()[0]
+    # Recall denominator excludes EAs that legitimately don't name a default fund.
+    eligible = max(1, n_ext - n_no_default)
+    recall = 100 * n_super / eligible
     by_conf = list(conn.execute(
         "SELECT confidence_super, COUNT(*) FROM extraction GROUP BY confidence_super"
     ))
     by_fund = list(conn.execute(
         "SELECT fund_name, COUNT(*) FROM default_super GROUP BY fund_name ORDER BY 2 DESC LIMIT 15"
     ))
+    by_source = list(conn.execute(
+        "SELECT COALESCE(source, 'extract'), COUNT(*) FROM default_super GROUP BY 1 ORDER BY 2 DESC"
+    ))
     console.print(f"agreements: {n:>6}    with pdf: {n_pdf:>6}    extracted: {n_ext:>6}    with super: {n_super:>6}")
+    console.print(f"no-default-named (excluded from recall): {n_no_default}")
+    console.print(f"recall on eligible: {n_super}/{eligible} = {recall:.1f}%")
     console.print("[bold]Super-fund confidence:[/bold]")
     for conf, count in by_conf:
         console.print(f"  {conf or 'null':<8}  {count}")
+    console.print("[bold]default_super by source:[/bold]")
+    for src, count in by_source:
+        console.print(f"  {src:<24}  {count}")
     console.print("[bold]Top default funds:[/bold]")
     for fund, count in by_fund:
         console.print(f"  {fund:<32}  {count}")

@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS extraction (
   term_start         DATE,
   term_end           DATE,
   ocr                INTEGER,
+  no_default_named   INTEGER DEFAULT 0,
   confidence_super   TEXT,
   confidence_signed  TEXT,
   confidence_term    TEXT,
@@ -76,6 +77,7 @@ CREATE TABLE IF NOT EXISTS default_super (
   fund_abn       TEXT,
   fund_usi       TEXT,
   source_excerpt TEXT,
+  source         TEXT,
   PRIMARY KEY (ae_id, fund_name)
 );
 CREATE INDEX IF NOT EXISTS ix_default_super_fund ON default_super(fund_name);
@@ -91,6 +93,12 @@ CREATE TABLE IF NOT EXISTS crawl_state (
 """
 
 
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, col: str, decl: str) -> None:
+    have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if col not in have:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +107,8 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
+    _add_column_if_missing(conn, "extraction", "no_default_named", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "default_super", "source", "TEXT")
     return conn
 
 
