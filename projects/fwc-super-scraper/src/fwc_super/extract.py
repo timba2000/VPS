@@ -316,6 +316,9 @@ def extract(db_path: str | None = None, *, limit: int | None = None) -> Iterator
     for row in rows:
         ae_id = row["ae_id"]
         path = Path(row["pdf_path"])
+        # Pre-process breadcrumb so a hang/OOM names the offending PDF.
+        size_mb = path.stat().st_size / 1_048_576 if path.exists() else -1
+        print(f"[extract] start {ae_id} {path.name} ({size_mb:.1f} MB)", flush=True)
         fallback_end = (
             dt.date.fromisoformat(row["expires"]) if row["expires"] else None
         )
