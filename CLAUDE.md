@@ -27,7 +27,7 @@ Layout:
 - `projects/` — active work.
 - `ops/` — local-only, not tracked.
 
-Active project: **`projects/fwc-super-scraper`** (Python). Builds a queryable SQLite dataset of default-super funds named in active Australian enterprise agreements, sourced from the Fair Work Commission. Pipeline is crawl → enrich → download → extract; each stage idempotent and resumable from `data/fwc.sqlite`. Entry point: `bash scripts/run_pilot.sh` (1,000-row pilot). Long pilot runs should be launched detached (`nohup setsid bash scripts/run_pilot.sh </dev/null >/dev/null 2>&1 &`) so they survive session disconnects. See `projects/fwc-super-scraper/README.md` for full pipeline + schema.
+Active project: **`projects/fwc-super-scraper`** (Python). Builds a queryable SQLite dataset of default-super funds named in active Australian enterprise agreements, sourced from the Fair Work Commission. Pipeline is crawl → enrich → download → extract; each stage idempotent and resumable from `data/fwc.sqlite`. Entry point: `bash scripts/run_pilot.sh` (1,000-row pilot). Launch long runs via `systemd-run --slice=system.slice --unit=<name> --property=MemoryHigh=5G --property=MemoryMax=6G --property=WorkingDirectory=$PWD /bin/bash -c '…'` — `nohup setsid` does not survive on this VPS. The `extract` stage leaks memory across PDFs inside one Python process; keep `BATCH<=10` in `scripts/extract_chunked.sh` so the per-batch respawn reclaims it. See `projects/fwc-super-scraper/README.md` for full pipeline + schema.
 
 Remote `git@github.com:timba2000/VPS.git` is working — SSH key is registered, `main` pushes cleanly.
 
