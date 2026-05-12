@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,11 @@ import pdfplumber
 
 from .db import connect
 from .funds import find_funds
+
+# Skip PDFs above this size — pdfplumber's text extraction memory and time both
+# grow with PDF byte size, and the 99th percentile in our corpus is ~25 MB.
+# Override via env, e.g. FWC_MAX_PDF_BYTES=$((48*1024*1024)).
+MAX_PDF_BYTES = int(os.environ.get("FWC_MAX_PDF_BYTES", 32 * 1024 * 1024))
 
 # ---------- Date utilities ----------------------------------------------------
 
@@ -120,6 +126,7 @@ class Extracted:
     signer_confidence: str = "low"
     ocr: bool = False
     no_default_named: bool = False
+    too_large: bool = False
 
 
 # Phrases used in stapling-era / employee-choice EAs that legitimately do not
@@ -281,6 +288,10 @@ def _needs_ocr(per_page_lengths: list[int]) -> bool:
 
 def extract_pdf(pdf_path: Path | str, *, fallback_end: dt.date | None = None) -> Extracted:
     pdf_path = Path(pdf_path)
+    if pdf_path.stat().st_size > MAX_PDF_BYTES:
+        e = Extracted()
+        e.too_large = True
+        return e
     with pdfplumber.open(pdf_path) as pdf:
         page_texts = [(p.extract_text() or "") for p in pdf.pages]
     text = "\n".join(page_texts)
@@ -331,9 +342,10 @@ def extract(db_path: str | None = None, *, limit: int | None = None) -> Iterator
         conn.execute(
             """INSERT OR REPLACE INTO extraction
                (ae_id, date_signed, term_start, term_end, ocr, no_default_named,
-                confidence_super, confidence_signed, confidence_term, confidence_signer,
-                raw_super_excerpt, raw_signed_excerpt, raw_signer_excerpt, extracted_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                too_large, confidence_super, confidence_signed, confidence_term,
+                confidence_signer, raw_super_excerpt, raw_signed_excerpt,
+                raw_signer_excerpt, extracted_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 ae_id,
                 e.date_signed.isoformat() if e.date_signed else None,
@@ -341,6 +353,7 @@ def extract(db_path: str | None = None, *, limit: int | None = None) -> Iterator
                 e.term_end.isoformat() if e.term_end else None,
                 int(e.ocr),
                 int(e.no_default_named),
+                int(e.too_large),
                 e.super_confidence,
                 e.signed_confidence,
                 e.term_confidence,
@@ -367,6 +380,10 @@ def extract(db_path: str | None = None, *, limit: int | None = None) -> Iterator
                    VALUES (?,?,?,?,?)""",
                 (ae_id, name, title, side, excerpt),
             )
+        if e.too_large:
+            size_mb = path.stat().st_size / 1_048_576
+            yield ae_id, f"SKIP too_large ({size_mb:.1f} MB)"
+            continue
         funds_str = ",".join(c for c, _ in e.default_super) or "-"
         yield ae_id, (
             f"super={funds_str}/{e.super_confidence} "

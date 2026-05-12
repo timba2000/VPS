@@ -186,8 +186,12 @@ def cmd_stats() -> None:
     n_no_default = conn.execute(
         "SELECT COUNT(*) FROM extraction WHERE no_default_named = 1"
     ).fetchone()[0]
-    # Recall denominator excludes EAs that legitimately don't name a default fund.
-    eligible = max(1, n_ext - n_no_default)
+    n_too_large = conn.execute(
+        "SELECT COUNT(*) FROM extraction WHERE too_large = 1"
+    ).fetchone()[0]
+    # Recall denominator excludes EAs that legitimately don't name a default fund
+    # and PDFs skipped by the size cap (never had their text scanned).
+    eligible = max(1, n_ext - n_no_default - n_too_large)
     recall = 100 * n_super / eligible
     by_conf = list(conn.execute(
         "SELECT confidence_super, COUNT(*) FROM extraction GROUP BY confidence_super"
@@ -200,6 +204,7 @@ def cmd_stats() -> None:
     ))
     console.print(f"agreements: {n:>6}    with pdf: {n_pdf:>6}    extracted: {n_ext:>6}    with super: {n_super:>6}")
     console.print(f"no-default-named (excluded from recall): {n_no_default}")
+    console.print(f"too-large (excluded from recall): {n_too_large}")
     console.print(f"recall on eligible: {n_super}/{eligible} = {recall:.1f}%")
     console.print("[bold]Super-fund confidence:[/bold]")
     for conf, count in by_conf:

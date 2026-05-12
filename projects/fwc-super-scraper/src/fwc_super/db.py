@@ -109,6 +109,7 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
     _add_column_if_missing(conn, "extraction", "no_default_named", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "extraction", "too_large", "INTEGER DEFAULT 0")
     _add_column_if_missing(conn, "default_super", "source", "TEXT")
     return conn
 
