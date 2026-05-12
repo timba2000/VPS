@@ -105,6 +105,7 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, isolation_level=None)  # autocommit
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(SCHEMA)
     _add_column_if_missing(conn, "extraction", "no_default_named", "INTEGER DEFAULT 0")

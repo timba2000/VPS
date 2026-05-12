@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 node_modules/
+ops/
+projects/fwc-super-scraper/data/
