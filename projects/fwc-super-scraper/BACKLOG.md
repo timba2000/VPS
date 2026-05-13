@@ -101,6 +101,18 @@ fund register; populating this would make the dataset much more queryable
 - Build a canonical-name → ABN/USI lookup keyed off the `FUNDS` table.
 - Backfill existing `default_super` rows.
 
+**Update (2026-05-13):**
+- Pipeline drift fixed: `scripts/run_next1k.sh` now invokes
+  `apra_backfill.py` after extract so new rows don't ship with NULL
+  ABN/USI. One-off catch-up backfilled 176 rows.
+- The current `data/apra_register.csv` is incomplete (273 rows, mostly
+  SMSFs). Six canonical funds with active default_super rows are absent
+  from it and stay NULL: Energy Super, Maritime Super, Mine Super,
+  Smartsave Member's Choice Super, Spirit Super, TWUSUPER (~98 rows
+  combined). Need a fuller source — APRA's RSE register XLSX
+  (https://www.apra.gov.au/register-of-superannuation-institutions) is
+  publicly downloadable and not captcha-gated, unlike SuperFundLookup.
+
 ---
 
 *This file is the durable backlog — survives terminal exit and new sessions.*
