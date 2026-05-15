@@ -57,24 +57,41 @@ def download(
             ae_id = row["ae_id"]
             target = pdf_dir / f"{ae_id}.pdf"
             blob = blob_url_for(ae_id, row["status"])
-            path = urlparse(blob).path
-            try:
-                resp = client.get(path)
-                content = resp.content
-                if not content or content[:4] != b"%PDF":
-                    yield ae_id, "NOT_PDF"
+            # Prefer the row's pdf_url (media/download → SharePoint redirect path)
+            # since the canonical blob 404s for ~12% of agreements.
+            candidates = []
+            if row["pdf_url"]:
+                candidates.append(row["pdf_url"])
+            candidates.append(blob)
+            content = None
+            used_url = None
+            last_err: Exception | None = None
+            for url in candidates:
+                path = urlparse(url).path
+                try:
+                    resp = client.get(path)
+                    if resp.content and resp.content[:4] == b"%PDF":
+                        content = resp.content
+                        used_url = url
+                        break
+                except Exception as exc:  # noqa: BLE001
+                    last_err = exc
                     continue
-                target.write_bytes(content)
-                sha = hashlib.sha256(content).hexdigest()
-                size = len(content)
-                now = dt.datetime.utcnow().isoformat(timespec="seconds")
-                conn.execute(
-                    """UPDATE agreements
-                       SET pdf_path = ?, pdf_sha256 = ?, pdf_bytes = ?, pdf_url = ?, downloaded_at = ?
-                       WHERE ae_id = ?""",
-                    (str(target), sha, size, blob, now, ae_id),
-                )
-                yield ae_id, f"OK {size}B"
-            except Exception as exc:  # noqa: BLE001
-                yield ae_id, f"ERR {exc.__class__.__name__}"
+            if content is None:
+                if last_err is not None:
+                    yield ae_id, f"ERR {last_err.__class__.__name__}"
+                else:
+                    yield ae_id, "NOT_PDF"
+                continue
+            target.write_bytes(content)
+            sha = hashlib.sha256(content).hexdigest()
+            size = len(content)
+            now = dt.datetime.utcnow().isoformat(timespec="seconds")
+            conn.execute(
+                """UPDATE agreements
+                   SET pdf_path = ?, pdf_sha256 = ?, pdf_bytes = ?, pdf_url = ?, downloaded_at = ?
+                   WHERE ae_id = ?""",
+                (str(target), sha, size, used_url, now, ae_id),
+            )
+            yield ae_id, f"OK {size}B"
     conn.close()
