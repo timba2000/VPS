@@ -2,8 +2,9 @@
 """Live terminal dashboard for the fwc extract pipeline.
 
 Refreshes every 2s. Reads from the SQLite DB, `systemctl show` for the
-currently active `fwc-extract-chunked-*` unit, and tails the unit's log
-file for the most recent batch boundaries and watchdog signals.
+currently active `fwc-*` unit (e.g. `fwc-continuous.service`,
+`fwc-extract-chunked-*`), and tails the unit's log file for the most
+recent batch boundaries and watchdog signals.
 
 Run from the project root:
 
@@ -30,7 +31,7 @@ from fwc_super.db import connect
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
-UNIT_PREFIX = "fwc-extract-chunked-"
+UNIT_PREFIX = "fwc-"
 REFRESH_SECONDS = 2.0
 RATE_WINDOW_SECONDS = 300  # 5-min rolling rate
 
@@ -95,8 +96,9 @@ def parse_systemd_timestamp(s: str) -> float | None:
 
 def log_path_for(unit: str) -> Path:
     # fwc-extract-chunked-v4.service -> data/extract_chunked_v4.log
-    name = unit.removeprefix(UNIT_PREFIX).removesuffix(".service")
-    return DATA_DIR / f"extract_chunked_{name}.log"
+    # fwc-continuous.service         -> data/continuous.log
+    name = unit.removeprefix(UNIT_PREFIX).removesuffix(".service").replace("-", "_")
+    return DATA_DIR / f"{name}.log"
 
 
 def tail_lines(path: Path, max_lines: int = 4000) -> list[str]:
