@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 UNIT="${UNIT:-fwc-continuous}"
-TARGET_EXTRACTED="${TARGET_EXTRACTED:-8000}"
+TARGET_AGREEMENTS="${TARGET_AGREEMENTS:-20000}"
 START_PAGE="${START_PAGE:-140}"
 
 if systemctl is-active --quiet "$UNIT.service"; then
@@ -17,14 +17,14 @@ if systemctl is-active --quiet "$UNIT.service"; then
     exit 1
 fi
 
-echo "Launching $UNIT.service  target=$TARGET_EXTRACTED  start_page=$START_PAGE"
+echo "Launching $UNIT.service  target=$TARGET_AGREEMENTS  start_page=$START_PAGE"
 systemd-run \
     --slice=system.slice \
     --unit="$UNIT" \
     --property=MemoryHigh=5G \
     --property=MemoryMax=6G \
     --property=WorkingDirectory="$PWD" \
-    --setenv=TARGET_EXTRACTED="$TARGET_EXTRACTED" \
+    --setenv=TARGET_AGREEMENTS="$TARGET_AGREEMENTS" \
     --setenv=START_PAGE="$START_PAGE" \
     /bin/bash scripts/run_continuous.sh
 

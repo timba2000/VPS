@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Continuous loop: keep cycling crawl → enrich → download → extract → backfill
 # until one of two stop conditions hits:
-#   1. extraction row count >= $TARGET_EXTRACTED   (primary)
+#   1. agreements row count >= $TARGET_AGREEMENTS  (primary)
 #   2. $MAX_EMPTY_CYCLES consecutive cycles with no new agreements AND no new
 #      extractions                                  (safety net)
 #
@@ -12,7 +12,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-TARGET_EXTRACTED="${TARGET_EXTRACTED:-8000}"
+TARGET_AGREEMENTS="${TARGET_AGREEMENTS:-20000}"
 PAGES_PER_CYCLE="${PAGES_PER_CYCLE:-20}"
 CATCHUP_PAGES="${CATCHUP_PAGES:-10}"
 MAX_EMPTY_CYCLES="${MAX_EMPTY_CYCLES:-3}"
@@ -52,21 +52,20 @@ print(connect().execute('''$1''').fetchone()[0])
 }
 
 echo
-echo "=== continuous started: $(date -Iseconds)  target=$TARGET_EXTRACTED  page_cursor=$PAGE_CURSOR  empty=$EMPTY_CYCLES ==="
+echo "=== continuous started: $(date -Iseconds)  target=$TARGET_AGREEMENTS  page_cursor=$PAGE_CURSOR  empty=$EMPTY_CYCLES ==="
 
 while true; do
     CYCLE_NO=$((CYCLE_NO + 1))
     echo
     echo "=== cycle $CYCLE_NO  page_cursor=$PAGE_CURSOR  empty=$EMPTY_CYCLES  $(date -Iseconds) ==="
 
-    EXT_NOW=$(count_sql "SELECT COUNT(*) FROM extraction")
-    if (( EXT_NOW >= TARGET_EXTRACTED )); then
-        echo "[target reached] extraction=$EXT_NOW >= $TARGET_EXTRACTED  stopping"
+    BEFORE_AGS=$(count_sql "SELECT COUNT(*) FROM agreements")
+    if (( BEFORE_AGS >= TARGET_AGREEMENTS )); then
+        echo "[target reached] agreements=$BEFORE_AGS >= $TARGET_AGREEMENTS  stopping"
         break
     fi
-    echo "[progress] extraction=$EXT_NOW / $TARGET_EXTRACTED"
-
-    BEFORE_AGS=$(count_sql "SELECT COUNT(*) FROM agreements")
+    EXT_NOW=$(count_sql "SELECT COUNT(*) FROM extraction")
+    echo "[progress] agreements=$BEFORE_AGS / $TARGET_AGREEMENTS   extraction=$EXT_NOW"
 
     echo "[crawl] pages $PAGE_CURSOR..$((PAGE_CURSOR + PAGES_PER_CYCLE - 1))"
     $FWC crawl --pages "$PAGES_PER_CYCLE" --start-page "$PAGE_CURSOR" --delay 0.8 \
@@ -110,8 +109,8 @@ while true; do
         break
     fi
 
-    if (( AFTER_EXT >= TARGET_EXTRACTED )); then
-        echo "=== stopping: extraction=$AFTER_EXT >= target=$TARGET_EXTRACTED ==="
+    if (( AFTER_AGS >= TARGET_AGREEMENTS )); then
+        echo "=== stopping: agreements=$AFTER_AGS >= target=$TARGET_AGREEMENTS ==="
         break
     fi
 
