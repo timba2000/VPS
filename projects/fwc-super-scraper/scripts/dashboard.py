@@ -14,7 +14,9 @@ Press Ctrl-C to quit.
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import time
 from collections import deque
@@ -34,6 +36,36 @@ DATA_DIR = PROJECT_ROOT / "data"
 UNIT_PREFIX = "fwc-"
 REFRESH_SECONDS = 2.0
 RATE_WINDOW_SECONDS = 300  # 5-min rolling rate
+DISK_MOUNT = "/"
+
+
+def _detect_target_agreements() -> int:
+    # Prefer explicit env override; else read TARGET_AGREEMENTS from the
+    # running continuous service so the dashboard tracks whatever target the
+    # loop is actually pursuing. Fall back to the current published target.
+    if "TARGET_AGREEMENTS" in os.environ:
+        try:
+            return int(os.environ["TARGET_AGREEMENTS"])
+        except ValueError:
+            pass
+    try:
+        out = subprocess.run(
+            ["systemctl", "show", "fwc-continuous.service", "-p", "Environment"],
+            capture_output=True, text=True,
+        ).stdout
+        for line in out.splitlines():
+            if not line.startswith("Environment="):
+                continue
+            for kv in line[len("Environment="):].split():
+                if kv.startswith("TARGET_AGREEMENTS="):
+                    return int(kv.split("=", 1)[1])
+    except (subprocess.SubprocessError, ValueError, FileNotFoundError):
+        pass
+    return 35109
+
+
+TARGET_AGREEMENTS = _detect_target_agreements()
+PRUNE_THRESHOLD_GIB = int(os.environ.get("PRUNE_THRESHOLD_GIB", 81))
 
 BATCH_LINE_RE = re.compile(r"^--- batch (\d+)\s+remaining=(\d+)\s+(\S+)")
 START_LINE_RE = re.compile(r"^\[extract\] start (\S+) (\S+) \(([\d.]+) MB\)")
@@ -161,10 +193,21 @@ def parse_log(lines: list[str]) -> dict:
 
 
 def db_stats(conn) -> dict:
+    # `downloaded_ever` survives pruning (pdf_sha256 stays populated after the
+    # PDF file is deleted); `on_disk` reflects what's currently on the volume.
+    # `remaining` keys off pdf_sha256 so the to-extract queue doesn't appear
+    # to drain when pruned-but-extracted rows lose their pdf_path.
     rows = {
         "agreements": conn.execute("SELECT COUNT(*) FROM agreements").fetchone()[0],
-        "with_pdf": conn.execute(
+        "downloaded_ever": conn.execute(
+            "SELECT COUNT(*) FROM agreements WHERE pdf_sha256 IS NOT NULL"
+        ).fetchone()[0],
+        "on_disk": conn.execute(
             "SELECT COUNT(*) FROM agreements WHERE pdf_path IS NOT NULL"
+        ).fetchone()[0],
+        "pruned": conn.execute(
+            "SELECT COUNT(*) FROM agreements "
+            "WHERE pdf_sha256 IS NOT NULL AND pdf_path IS NULL"
         ).fetchone()[0],
         "extracted": conn.execute("SELECT COUNT(*) FROM extraction").fetchone()[0],
         "too_large": conn.execute(
@@ -176,7 +219,7 @@ def db_stats(conn) -> dict:
         "remaining": conn.execute(
             "SELECT COUNT(*) FROM agreements a "
             "LEFT JOIN extraction e ON a.ae_id=e.ae_id "
-            "WHERE e.ae_id IS NULL AND a.pdf_path IS NOT NULL"
+            "WHERE e.ae_id IS NULL AND a.pdf_sha256 IS NOT NULL"
         ).fetchone()[0],
     }
     return rows
@@ -211,17 +254,26 @@ def render(conn, history: deque) -> Panel:
 
     log_info = parse_log(tail_lines(log_path_for(unit))) if unit else None
 
+    target_pct = (stats["agreements"] / TARGET_AGREEMENTS * 100) if TARGET_AGREEMENTS else 0
+    target_color = "green" if stats["agreements"] >= TARGET_AGREEMENTS else "cyan"
+
     db_table = Table.grid(padding=(0, 2))
     db_table.add_column(justify="right", style="dim")
     db_table.add_column()
-    db_table.add_row("agreements", f"{stats['agreements']:>6,}")
-    db_table.add_row("with pdf", f"{stats['with_pdf']:>6,}")
-    db_table.add_row("extracted", f"[green]{stats['extracted']:>6,}[/green]")
-    db_table.add_row("remaining", f"[yellow]{stats['remaining']:>6,}[/yellow]")
-    db_table.add_row("too_large", f"{stats['too_large']:>6,}")
+    db_table.add_row(
+        "agreements",
+        f"[{target_color}]{stats['agreements']:>6,}[/{target_color}] / "
+        f"{TARGET_AGREEMENTS:,} ({target_pct:.1f}%)",
+    )
+    db_table.add_row("downloaded ever", f"{stats['downloaded_ever']:>6,}")
+    db_table.add_row("on disk now",     f"{stats['on_disk']:>6,}")
+    db_table.add_row("pruned",          f"[dim]{stats['pruned']:>6,}[/dim]")
+    db_table.add_row("extracted",       f"[green]{stats['extracted']:>6,}[/green]")
+    db_table.add_row("remaining",       f"[yellow]{stats['remaining']:>6,}[/yellow]")
+    db_table.add_row("too_large",       f"{stats['too_large']:>6,}")
     db_table.add_row("no_default_named", f"{stats['no_default_named']:>6,}")
-    pct = (stats["extracted"] / stats["with_pdf"] * 100) if stats["with_pdf"] else 0
-    db_table.add_row("progress", f"{pct:5.1f}% of downloaded PDFs")
+    pct = (stats["extracted"] / stats["downloaded_ever"] * 100) if stats["downloaded_ever"] else 0
+    db_table.add_row("extract progress", f"{pct:5.1f}% of downloaded ever")
     db_table.add_row("rate (5m)", f"{rate_per_min:5.1f} PDFs/min")
     db_table.add_row("ETA", eta_text)
 
@@ -256,6 +308,27 @@ def render(conn, history: deque) -> Panel:
     else:
         svc_table.add_row("unit", "[red]no active fwc-extract-chunked-* service[/red]")
 
+    disk = shutil.disk_usage(DISK_MOUNT)
+    used_gib = disk.used / (1024 ** 3)
+    total_gib = disk.total / (1024 ** 3)
+    free_gib = disk.free / (1024 ** 3)
+    headroom_gib = PRUNE_THRESHOLD_GIB - used_gib
+    above = used_gib >= PRUNE_THRESHOLD_GIB
+    disk_color = "yellow" if above else ("magenta" if headroom_gib < 5 else "green")
+    storage_table = Table.grid(padding=(0, 2))
+    storage_table.add_column(justify="right", style="dim")
+    storage_table.add_column()
+    storage_table.add_row(
+        f"{DISK_MOUNT} used",
+        f"[{disk_color}]{used_gib:5.1f} GiB[/{disk_color}] / {total_gib:.0f} GiB total "
+        f"({free_gib:.1f} free)",
+    )
+    if above:
+        storage_table.add_row("purge", f"[yellow]over threshold ({PRUNE_THRESHOLD_GIB} GiB) — next hourly tick will prune[/yellow]")
+    else:
+        storage_table.add_row("purge at", f"{PRUNE_THRESHOLD_GIB} GiB (headroom {headroom_gib:+.1f} GiB)")
+    storage_table.add_row("pruned PDFs", f"{stats['pruned']:>6,} ({stats['on_disk']:,} on disk now)")
+
     wd_table = Table.grid(padding=(0, 2))
     wd_table.add_column(justify="right", style="dim")
     wd_table.add_column()
@@ -280,6 +353,7 @@ def render(conn, history: deque) -> Panel:
             header,
             Panel(db_table, title="database", border_style="cyan"),
             Panel(svc_table, title="service",  border_style="green"),
+            Panel(storage_table, title="storage", border_style="blue"),
             Panel(wd_table, title="watchdog", border_style="magenta"),
         ),
         border_style="white",
