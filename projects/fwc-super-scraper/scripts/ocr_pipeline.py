@@ -22,14 +22,13 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 import pdfplumber
 
 from fwc_super.db import connect
 from fwc_super.extract import _needs_ocr, extract_pdf
-
-OCR_TAG = "ocr_2026-05-11"
 
 
 def _candidates(conn, limit: int) -> list[tuple[str, str]]:
@@ -40,6 +39,7 @@ def _candidates(conn, limit: int) -> list[tuple[str, str]]:
         JOIN agreements a ON a.ae_id = e.ae_id
         LEFT JOIN default_super d ON d.ae_id = e.ae_id
         WHERE d.ae_id IS NULL AND a.pdf_path IS NOT NULL
+          AND e.ocr = 1
     """
     chosen: list[tuple[str, str]] = []
     scanned = 0
@@ -49,6 +49,10 @@ def _candidates(conn, limit: int) -> list[tuple[str, str]]:
         scanned += 1
         path = Path(row["pdf_path"])
         if not path.exists():
+            continue
+        # Skip PDFs we've already attempted (backup means OCR ran, regardless
+        # of outcome). Lets batched respawn converge instead of re-scanning.
+        if path.with_suffix(path.suffix + ".pre-ocr.pdf").exists():
             continue
         try:
             with pdfplumber.open(path) as pdf:
@@ -87,9 +91,12 @@ def _ocr_inplace(pdf: Path) -> tuple[bool, str]:
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--limit", type=int, default=50, help="Max PDFs to OCR.")
+    p.add_argument("--tag", default=f"ocr_{date.today():%Y-%m-%d}",
+                   help="Value written to default_super.source. Defaults to today.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print candidates only; don't run OCR or write DB.")
     args = p.parse_args()
+    ocr_tag = args.tag
 
     conn = connect()
     cands = _candidates(conn, args.limit)
@@ -137,7 +144,7 @@ def main() -> int:
             conn.execute(
                 "INSERT INTO default_super (ae_id, fund_name, source_excerpt, source) "
                 "VALUES (?, ?, ?, ?)",
-                (ae_id, canonical, excerpt, OCR_TAG),
+                (ae_id, canonical, excerpt, ocr_tag),
             )
             funds_added += 1
         funds_str = ",".join(c for c, _ in e.default_super) or "-"
