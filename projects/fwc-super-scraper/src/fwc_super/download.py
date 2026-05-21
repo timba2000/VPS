@@ -55,7 +55,10 @@ def download(
     with PoliteClient(delay=delay) as client:
         for row in rows:
             ae_id = row["ae_id"]
-            target = pdf_dir / f"{ae_id}.pdf"
+            # ae_ids occasionally arrive as matter numbers like "AG2022/4319";
+            # the slash would make write_bytes target a non-existent subdir.
+            safe_id = ae_id.replace("/", "_")
+            target = pdf_dir / f"{safe_id}.pdf"
             blob = blob_url_for(ae_id, row["status"])
             # Prefer the row's pdf_url (media/download → SharePoint redirect path)
             # since the canonical blob 404s for ~12% of agreements.
