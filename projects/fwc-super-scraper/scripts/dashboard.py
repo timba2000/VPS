@@ -360,6 +360,20 @@ def render(conn, history: deque) -> Panel:
 
     log_info = parse_log(tail_lines(log_path_for(unit))) if unit else None
 
+    # A poison PDF logs an ERR every batch until it's quarantined, then never
+    # again — but those old ERR lines linger in the log tail and would keep
+    # showing as a "recent error" long after the PDF was parked. Drop errors
+    # whose ae_id already carries too_large=1 (the quarantine marker), since
+    # they're resolved, not live.
+    if log_info and log_info["errors"]:
+        quarantined = {
+            r[0].lower()
+            for r in conn.execute("SELECT ae_id FROM extraction WHERE too_large=1")
+        }
+        log_info["errors"] = [
+            e for e in log_info["errors"] if e[0].lower() not in quarantined
+        ]
+
     target_pct = (stats["agreements"] / TARGET_AGREEMENTS * 100) if TARGET_AGREEMENTS else 0
     target_color = "green" if stats["agreements"] >= TARGET_AGREEMENTS else "cyan"
 
