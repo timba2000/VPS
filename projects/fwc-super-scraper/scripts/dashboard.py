@@ -225,6 +225,27 @@ def db_stats(conn) -> dict:
     return rows
 
 
+def funds_stats(conn, top_n: int = 10) -> dict:
+    total_mentions = conn.execute("SELECT COUNT(*) FROM default_super").fetchone()[0]
+    distinct_funds = conn.execute(
+        "SELECT COUNT(DISTINCT fund_name) FROM default_super"
+    ).fetchone()[0]
+    aes_with_fund = conn.execute(
+        "SELECT COUNT(DISTINCT ae_id) FROM default_super"
+    ).fetchone()[0]
+    top = conn.execute(
+        "SELECT fund_name, COUNT(DISTINCT ae_id) AS n "
+        "FROM default_super GROUP BY fund_name ORDER BY n DESC LIMIT ?",
+        (top_n,),
+    ).fetchall()
+    return {
+        "total_mentions": total_mentions,
+        "distinct_funds": distinct_funds,
+        "aes_with_fund": aes_with_fund,
+        "top": [(r[0], r[1]) for r in top],
+    }
+
+
 def render(conn, history: deque) -> Panel:
     now = time.time()
     stats = db_stats(conn)
@@ -329,6 +350,23 @@ def render(conn, history: deque) -> Panel:
         storage_table.add_row("purge at", f"{PRUNE_THRESHOLD_GIB} GiB (headroom {headroom_gib:+.1f} GiB)")
     storage_table.add_row("pruned PDFs", f"{stats['pruned']:>6,} ({stats['on_disk']:,} on disk now)")
 
+    fstats = funds_stats(conn)
+    funds_table = Table.grid(padding=(0, 2))
+    funds_table.add_column(justify="right", style="dim")
+    funds_table.add_column()
+    named_pct = (
+        fstats["aes_with_fund"] / stats["extracted"] * 100
+        if stats["extracted"] else 0
+    )
+    funds_table.add_row("agreements w/ fund", f"{fstats['aes_with_fund']:>6,} ({named_pct:.1f}% of extracted)")
+    funds_table.add_row("fund mentions",      f"{fstats['total_mentions']:>6,}")
+    funds_table.add_row("distinct funds",     f"{fstats['distinct_funds']:>6,}")
+    if fstats["top"]:
+        funds_table.add_row("", "")
+        funds_table.add_row("[dim]top funds[/dim]", "[dim]agreements[/dim]")
+        for name, n in fstats["top"]:
+            funds_table.add_row(name, f"{n:>5,}")
+
     wd_table = Table.grid(padding=(0, 2))
     wd_table.add_column(justify="right", style="dim")
     wd_table.add_column()
@@ -354,6 +392,7 @@ def render(conn, history: deque) -> Panel:
             Panel(db_table, title="database", border_style="cyan"),
             Panel(svc_table, title="service",  border_style="green"),
             Panel(storage_table, title="storage", border_style="blue"),
+            Panel(funds_table, title="super funds", border_style="yellow"),
             Panel(wd_table, title="watchdog", border_style="magenta"),
         ),
         border_style="white",
