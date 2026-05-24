@@ -68,8 +68,55 @@ TARGET_AGREEMENTS = _detect_target_agreements()
 PRUNE_THRESHOLD_GIB = int(os.environ.get("PRUNE_THRESHOLD_GIB", 81))
 
 BATCH_LINE_RE = re.compile(r"^--- batch (\d+)\s+remaining=(\d+)\s+(\S+)")
-START_LINE_RE = re.compile(r"^\[extract\] start (\S+) (\S+) \(([\d.]+) MB\)")
-RESULT_LINE_RE = re.compile(r"^(AE\d+)\t(.+)")
+# The "@ <utc>" timestamp is optional: older log lines (pre-2026-05-24) lack it.
+START_LINE_RE = re.compile(
+    r"^\[extract\] start (\S+) (\S+) \(([\d.-]+) MB\)(?:\s+@\s+(\S+))?"
+)
+# ae_ids are lowercase (e.g. ae413574); the result separator is whitespace, not
+# a tab — rich's console.print expands the tab when writing to the log file.
+RESULT_LINE_RE = re.compile(r"^(ae\d+)\s+(\S.*)$", re.I)
+PHASE_FAIL_RE = re.compile(r"^\[([\w-]+)\] failed rc=")
+PHASE_LINE_RE = re.compile(
+    r"^\[(crawl|catch-up crawl|enrich|download|extract chunked|apra backfill|sleep)\]"
+)
+PHASE_LABELS = {
+    "crawl": "crawling list pages",
+    "catch-up crawl": "crawling (catch-up)",
+    "enrich": "enriching detail pages",
+    "download": "downloading PDFs",
+    "extract chunked": "extracting PDFs",
+    "apra backfill": "APRA backfill",
+    "sleep": "idle (between cycles)",
+}
+
+# When the extractor doesn't stamp a start time (old log lines), fall back to
+# the wall-clock time this dashboard first observed the in-flight ae_id.
+_inflight_seen: dict[str, float] = {}
+
+
+def parse_iso_utc(s: str | None) -> float | None:
+    if not s:
+        return None
+    try:
+        return (
+            datetime.strptime(s.rstrip("Z"), "%Y-%m-%dT%H:%M:%S")
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
+    except ValueError:
+        return None
+
+
+def inflight_elapsed(ae: str, log_start: float | None, now: float) -> float:
+    if log_start is not None:
+        _inflight_seen.clear()
+        return max(0.0, now - log_start)
+    first = _inflight_seen.get(ae)
+    if first is None:
+        first = now
+        _inflight_seen.clear()
+        _inflight_seen[ae] = first
+    return now - first
 
 
 def active_unit() -> str | None:
@@ -133,12 +180,17 @@ def log_path_for(unit: str) -> Path:
     return DATA_DIR / f"{name}.log"
 
 
-def tail_lines(path: Path, max_lines: int = 4000) -> list[str]:
+def tail_lines(path: Path, max_lines: int = 4000, max_bytes: int = 2_000_000) -> list[str]:
     if not path.exists():
         return []
-    # Cheap tail: read whole file (typical run logs are KB-scale).
-    with path.open() as f:
-        return f.read().splitlines()[-max_lines:]
+    # continuous.log grows into the hundreds of MB, so read only the trailing
+    # slice rather than slurping the whole file every refresh.
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - max_bytes))
+        data = f.read()
+    return data.decode("utf-8", "replace").splitlines()[-max_lines:]
 
 
 def parse_log(lines: list[str]) -> dict:
@@ -146,10 +198,18 @@ def parse_log(lines: list[str]) -> dict:
     in_flight_ae: str | None = None
     in_flight_pdf: str | None = None
     in_flight_mb: float | None = None
+    in_flight_start: float | None = None
+    errors_by_ae: dict[str, list] = {}  # ae_id -> [latest_msg, count]
+    phase: str | None = None
+    phase_fails: list[str] = []
     quarantines: list[str] = []
     timeouts = 0
     batch_fails = 0
     all_done: str | None = None
+
+    def _clear_in_flight() -> None:
+        nonlocal in_flight_ae, in_flight_pdf, in_flight_mb, in_flight_start
+        in_flight_ae = in_flight_pdf = in_flight_mb = in_flight_start = None
 
     for line in lines:
         m = BATCH_LINE_RE.match(line)
@@ -161,18 +221,39 @@ def parse_log(lines: list[str]) -> dict:
             in_flight_ae = m.group(1)
             in_flight_pdf = m.group(2)
             in_flight_mb = float(m.group(3))
+            in_flight_start = parse_iso_utc(m.group(4))
             continue
         m = RESULT_LINE_RE.match(line)
-        if m and m.group(1) == in_flight_ae:
-            in_flight_ae = None
-            in_flight_pdf = None
-            in_flight_mb = None
+        if m:
+            ae, msg = m.group(1), m.group(2).strip()
+            if ae == in_flight_ae:
+                _clear_in_flight()
+            if msg.startswith("ERR"):
+                # Collapse repeats of the same failing ae_id (a single poison
+                # PDF can log thousands of identical errors) into one row + count.
+                if ae in errors_by_ae:
+                    errors_by_ae[ae][0] = msg
+                    errors_by_ae[ae][1] += 1
+                else:
+                    errors_by_ae[ae] = [msg, 1]
+            continue
+        # Check the "[phase] failed rc=" form before the plain phase marker,
+        # since both start with "[phase]". Any phase boundary means the extract
+        # of a given PDF is structurally over, so drop a stale in-flight (e.g. a
+        # dangling start line left by a killed process).
+        m = PHASE_FAIL_RE.match(line)
+        if m:
+            phase_fails.append(line.strip())
+            _clear_in_flight()
+            continue
+        m = PHASE_LINE_RE.match(line)
+        if m:
+            phase = m.group(1)
+            _clear_in_flight()
             continue
         if line.startswith("QUARANTINE "):
             quarantines.append(line)
-            in_flight_ae = None
-            in_flight_pdf = None
-            in_flight_mb = None
+            _clear_in_flight()
         elif line.startswith("BATCH_TIMEOUT"):
             timeouts += 1
         elif line.startswith("BATCH_FAIL"):
@@ -185,6 +266,10 @@ def parse_log(lines: list[str]) -> dict:
         "in_flight_ae": in_flight_ae,
         "in_flight_pdf": in_flight_pdf,
         "in_flight_mb": in_flight_mb,
+        "in_flight_start": in_flight_start,
+        "errors": [(ae, v[0], v[1]) for ae, v in errors_by_ae.items()],
+        "phase": phase,
+        "phase_fails": phase_fails,
         "quarantines": quarantines,
         "timeouts": timeouts,
         "batch_fails": batch_fails,
@@ -316,18 +401,25 @@ def render(conn, history: deque) -> Panel:
         if mem_max:
             mem_str += f" / max {fmt_bytes(mem_max)}"
         svc_table.add_row("memory", mem_str)
+        if log_info and log_info.get("phase"):
+            svc_table.add_row("phase", PHASE_LABELS.get(log_info["phase"], log_info["phase"]))
         if log_info and log_info["batches"]:
             last = log_info["batches"][-1]
             svc_table.add_row("current batch", f"#{last[0]} (remaining at start: {last[1]:,})")
         if log_info and log_info["in_flight_ae"]:
+            el = inflight_elapsed(log_info["in_flight_ae"], log_info["in_flight_start"], now)
+            # A typical PDF parses in a few seconds; escalate colour so a slow
+            # or hung parse is obvious.
+            el_color = "green" if el < 30 else ("yellow" if el < 90 else "red")
             svc_table.add_row(
                 "in flight",
-                f"{log_info['in_flight_ae']} ({log_info['in_flight_mb']:.1f} MB)",
+                f"{log_info['in_flight_ae']} ({log_info['in_flight_mb']:.1f} MB) "
+                f"· [{el_color}]{fmt_duration(el)}[/{el_color}]",
             )
         if log_info and log_info["all_done"]:
             svc_table.add_row("status", f"[bold green]{log_info['all_done']}[/bold green]")
     else:
-        svc_table.add_row("unit", "[red]no active fwc-extract-chunked-* service[/red]")
+        svc_table.add_row("unit", "[red]no active fwc-* service[/red]")
 
     disk = shutil.disk_usage(DISK_MOUNT)
     used_gib = disk.used / (1024 ** 3)
@@ -371,13 +463,28 @@ def render(conn, history: deque) -> Panel:
     wd_table.add_column(justify="right", style="dim")
     wd_table.add_column()
     if log_info:
+        n_err = len(log_info["errors"])  # distinct failing agreements
+        e_color = "red" if n_err else "dim"
+        wd_table.add_row("extract errors", f"[{e_color}]{n_err}[/{e_color}] [dim]agreements[/dim]")
         q_color = "yellow" if log_info["quarantines"] else "dim"
         wd_table.add_row("quarantines", f"[{q_color}]{len(log_info['quarantines'])}[/{q_color}]")
         wd_table.add_row("timeouts", str(log_info["timeouts"]))
         wd_table.add_row("batch fails", str(log_info["batch_fails"]))
+        if log_info["errors"]:
+            wd_table.add_row("", "")
+            wd_table.add_row("[red]recent errors[/red]", "")
+            for ae, msg, count in log_info["errors"][-5:]:
+                suffix = f" [dim]×{count}[/dim]" if count > 1 else ""
+                wd_table.add_row(ae, f"[red]{msg}[/red]{suffix}")
+        if log_info["phase_fails"]:
+            wd_table.add_row("", "")
+            for pf in log_info["phase_fails"][-3:]:
+                wd_table.add_row("[red]phase fail[/red]", f"[red]{pf}[/red]")
         if log_info["quarantines"]:
-            recent = log_info["quarantines"][-3:]
-            wd_table.add_row("recent", "\n".join(recent))
+            wd_table.add_row("", "")
+            wd_table.add_row("[dim]recent quarantines[/dim]", "")
+            for q in log_info["quarantines"][-3:]:
+                wd_table.add_row("", f"[yellow]{q}[/yellow]")
     else:
         wd_table.add_row("watchdog", "no log available")
 
@@ -393,7 +500,7 @@ def render(conn, history: deque) -> Panel:
             Panel(svc_table, title="service",  border_style="green"),
             Panel(storage_table, title="storage", border_style="blue"),
             Panel(funds_table, title="super funds", border_style="yellow"),
-            Panel(wd_table, title="watchdog", border_style="magenta"),
+            Panel(wd_table, title="errors / watchdog", border_style="magenta"),
         ),
         border_style="white",
     )
