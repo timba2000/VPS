@@ -336,7 +336,16 @@ def extract(db_path: str | None = None, *, limit: int | None = None) -> Iterator
         try:
             e = extract_pdf(path, fallback_end=fallback_end)
         except Exception as exc:  # noqa: BLE001
-            yield ae_id, f"ERR {exc.__class__.__name__}"
+            # Without a row here the candidate query (e.ae_id IS NULL) would
+            # re-select an unparseable PDF every batch forever. Quarantine with
+            # too_large=1 — the same marker the chunked-extract watchdog uses —
+            # so it is skipped and never pruned (file kept for a future retry).
+            conn.execute(
+                "INSERT INTO extraction(ae_id, too_large) VALUES(?, 1) "
+                "ON CONFLICT(ae_id) DO UPDATE SET too_large=1",
+                (ae_id,),
+            )
+            yield ae_id, f"ERR {exc.__class__.__name__} (quarantined)"
             continue
         now = dt.datetime.utcnow().isoformat(timespec="seconds")
         conn.execute(
