@@ -113,3 +113,47 @@ def test_transport_workers_no_apostrophe():
     assert "TWUSUPER" in _names(
         find_funds("Contributions to the Transport Workers Union Super fund.")
     )
+
+
+def test_lucrf_long_alias():
+    # LUCRF is usually written out in full as the default fund.
+    matches = find_funds(
+        "The default fund will be the Labour Union Co-operative Retirement Fund."
+    )
+    assert "LUCRF Super" in _names(matches)
+    assert "LUCRF Super" in _names(find_funds("Site default: LUCRF."))
+
+
+def test_added_funds_match():
+    cases = {
+        "Default fund: Qantas Superannuation Plan.": "Qantas Super",
+        "Contributions to the Qube Superannuation Plan.": "Qube Super",
+        "Default is ANZ Smart Choice Super.": "ANZ Smart Choice Super",
+        "Statewide Super is the default fund.": "Statewide Super",
+        "Default fund: Austsafe Super.": "Austsafe Super",
+        "The default fund is Christian Super.": "Christian Super",
+        "Access the Bidfood AMP Custom Super Fund or Australian Super.":
+            "Bidfood AMP Custom Super Fund",
+        "Members of the Commonwealth Superannuation Scheme.":
+            "Commonwealth Superannuation Corporation",
+    }
+    for text, fund in cases.items():
+        assert fund in _names(find_funds(text)), f"{fund} not found in {text!r}"
+
+
+def test_miesf_distinct_from_amist():
+    # MIESF (Meat Industry Employees' Superannuation Fund) is a different fund
+    # from AMIST (Australian Meat Industry Superannuation Trust). Each must map
+    # to its own canonical and not bleed into the other.
+    miesf = _names(find_funds("Default: Meat Industry Employees' Superannuation Fund."))
+    assert "Meat Industry Employees Superannuation Fund" in miesf
+    assert "AMIST Super" not in miesf
+    amist = _names(find_funds("Default fund: AMIST Super."))
+    assert "AMIST Super" in amist
+    assert "Meat Industry Employees Superannuation Fund" not in amist
+
+
+def test_aware_super_not_confused_with_new_two_token_funds():
+    # Guard against fuzzy collisions: "Aware Super" must resolve to Aware Super
+    # only, not fuzzy-match a newly added two-token fund.
+    assert _names(find_funds("The default fund is Aware Super.")) == ["Aware Super"]

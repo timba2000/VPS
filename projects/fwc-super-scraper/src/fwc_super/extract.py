@@ -146,7 +146,10 @@ NO_DEFAULT_PHRASES = (
 
 
 def _no_default_named(text: str) -> bool:
-    low = text.lower()
+    # Collapse newlines/whitespace runs to single spaces first: pdfplumber
+    # inserts line breaks mid-phrase, which would otherwise defeat the
+    # substring match for any multi-word phrase.
+    low = re.sub(r"\s+", " ", text.lower())
     return any(p in low for p in NO_DEFAULT_PHRASES)
 
 

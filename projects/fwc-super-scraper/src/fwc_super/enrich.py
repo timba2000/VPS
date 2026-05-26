@@ -63,7 +63,7 @@ def enrich(
     conn = connect(db_path) if db_path else connect()
     sql = "SELECT ae_id, detail_url, pdf_url FROM agreements"
     if only_missing:
-        sql += " WHERE industry IS NULL OR pdf_url IS NULL"
+        sql += " WHERE enriched_at IS NULL OR pdf_url IS NULL"
     if limit:
         sql += f" LIMIT {int(limit)}"
 

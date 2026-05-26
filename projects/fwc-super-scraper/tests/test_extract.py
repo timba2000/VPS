@@ -72,6 +72,9 @@ def test_needs_ocr_heuristic(page_lengths, expected):
     ("The fund nominated by the employee will receive contributions.", True),
     ("The default fund is AustralianSuper.", False),
     ("Contributions to Cbus will be made monthly.", False),
+    # pdfplumber breaks phrases across lines; normalization must still match.
+    ("paid into the\nfund nominated by\nthe employee each week", True),
+    ("contributions in accordance with the\nSuperannuation   Guarantee", True),
 ])
 def test_no_default_named_detection(text, expected):
     assert _no_default_named(text) is expected

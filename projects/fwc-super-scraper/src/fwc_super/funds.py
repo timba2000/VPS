@@ -62,6 +62,7 @@ FUNDS: tuple[Fund, ...] = (
     )),
     Fund("Commonwealth Superannuation Corporation", (
         "Commonwealth Superannuation Corporation",
+        "Commonwealth Superannuation Scheme",
         "PSSap", "MilitarySuper", "ADF Super",
     )),
     Fund("Team Super", ("Team Super", "TEAMSUPER", "TeamSuper")),
@@ -74,6 +75,30 @@ FUNDS: tuple[Fund, ...] = (
     )),
     Fund("Brighter Super", ("Brighter Super", "LGIAsuper", "LGIA Super")),
     Fund("Energy Super", ("Energy Super", "Energy Super Plan")),
+    # Funds named as defaults in EAs but outside the original top-list. Added
+    # from a data-driven scan of agreements that named a fund we didn't yet
+    # recognise. Several are now merged (LUCRF→AustralianSuper, Statewide→
+    # Hostplus, Austsafe→ART), but the agreement named them at signing.
+    Fund("LUCRF Super", (
+        "LUCRF Super", "LUCRF",
+        "Labour Union Co-operative Retirement Fund",
+        "Labour Union Cooperative Retirement Fund",
+    )),
+    Fund("Qantas Super", (
+        "Qantas Super", "Qantas Superannuation Plan", "Qantas Superannuation",
+    )),
+    Fund("Qube Super", ("Qube Super", "Qube Superannuation Plan", "Qube Superannuation")),
+    Fund("ANZ Smart Choice Super", ("ANZ Smart Choice Super", "ANZ Smart Choice")),
+    Fund("Statewide Super", ("Statewide Super", "Statewide Superannuation")),
+    Fund("Austsafe Super", ("Austsafe Super", "AustSafe Super")),
+    Fund("Christian Super", ("Christian Super",)),
+    Fund("Meat Industry Employees Superannuation Fund", (
+        "Meat Industry Employees' Superannuation Fund",
+        "Meat Industry Employees Superannuation Fund", "MIESF",
+    )),
+    Fund("Bidfood AMP Custom Super Fund", (
+        "Bidfood AMP Custom Super Fund", "Bidfood AMP Custom Super",
+    )),
 )
 
 

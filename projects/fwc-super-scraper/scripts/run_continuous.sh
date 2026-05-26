@@ -19,6 +19,7 @@ MAX_EMPTY_CYCLES="${MAX_EMPTY_CYCLES:-3}"
 CYCLE_DELAY="${CYCLE_DELAY:-180}"
 BATCH="${BATCH:-10}"
 BATCH_TIMEOUT="${BATCH_TIMEOUT:-1200}"
+DOWNLOAD_LIMIT="${DOWNLOAD_LIMIT:-800}"
 
 STATE_FILE="data/continuous_state.env"
 LOG="data/continuous.log"
@@ -78,8 +79,8 @@ while true; do
     echo "[enrich]"
     $FWC enrich --delay 0.8 || echo "[enrich] failed rc=$?"
 
-    echo "[download]"
-    $FWC download --delay 0.6 || echo "[download] failed rc=$?"
+    echo "[download]  limit=$DOWNLOAD_LIMIT"
+    $FWC download --limit "$DOWNLOAD_LIMIT" --delay 0.6 || echo "[download] failed rc=$?"
 
     echo "[extract chunked]  BATCH=$BATCH timeout=${BATCH_TIMEOUT}s"
     BATCH="$BATCH" BATCH_TIMEOUT="$BATCH_TIMEOUT" bash scripts/extract_chunked.sh \
