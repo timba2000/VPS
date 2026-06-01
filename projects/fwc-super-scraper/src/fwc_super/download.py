@@ -44,6 +44,12 @@ def download(
     where = []
     if not redownload:
         where.append("pdf_path IS NULL")
+        # fwc-prune clears pdf_path on already-extracted agreements after it
+        # deletes their PDF, so "pdf_path IS NULL" alone re-selects ~22k
+        # extracted rows ahead of the genuine backlog and the limit is spent
+        # re-downloading PDFs extract then skips. Exclude anything already
+        # extracted so the download budget targets un-extracted agreements.
+        where.append("ae_id NOT IN (SELECT ae_id FROM extraction)")
     if where:
         sql += " WHERE " + " AND ".join(where)
     if limit:

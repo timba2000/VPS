@@ -290,6 +290,12 @@ def db_stats(conn) -> dict:
         "on_disk": conn.execute(
             "SELECT COUNT(*) FROM agreements WHERE pdf_path IS NOT NULL"
         ).fetchone()[0],
+        # The never-downloaded backlog. pdf_sha256 survives pruning, so
+        # "sha IS NULL" is the prune-immune count of agreements that still
+        # need their PDF fetched (and therefore extracting) for the first time.
+        "undownloaded": conn.execute(
+            "SELECT COUNT(*) FROM agreements WHERE pdf_sha256 IS NULL"
+        ).fetchone()[0],
         "pruned": conn.execute(
             "SELECT COUNT(*) FROM agreements "
             "WHERE pdf_sha256 IS NOT NULL AND pdf_path IS NULL"
@@ -334,20 +340,27 @@ def funds_stats(conn, top_n: int = 10) -> dict:
 def render(conn, history: deque) -> Panel:
     now = time.time()
     stats = db_stats(conn)
-    history.append((now, stats["extracted"]))
+    history.append((now, stats["extracted"], stats["downloaded_ever"]))
     while history and now - history[0][0] > RATE_WINDOW_SECONDS:
         history.popleft()
 
     rate_per_min = 0.0
     eta_text = "-"
+    dl_rate_per_min = 0.0
+    dl_eta_text = "-"
     if len(history) >= 2:
-        t0, c0 = history[0]
+        t0, c0, d0 = history[0]
         dt = now - t0
-        dc = stats["extracted"] - c0
         if dt > 0:
+            dc = stats["extracted"] - c0
             rate_per_min = dc / dt * 60.0
             if rate_per_min > 0 and stats["remaining"] > 0:
                 eta_text = fmt_duration(stats["remaining"] / rate_per_min * 60.0)
+            # Download rate/ETA tracks the never-downloaded backlog draining.
+            dd = stats["downloaded_ever"] - d0
+            dl_rate_per_min = dd / dt * 60.0
+            if dl_rate_per_min > 0 and stats["undownloaded"] > 0:
+                dl_eta_text = fmt_duration(stats["undownloaded"] / dl_rate_per_min * 60.0)
 
     unit = active_unit()
     props = unit_props(unit) if unit else {}
@@ -385,17 +398,31 @@ def render(conn, history: deque) -> Panel:
         f"[{target_color}]{stats['agreements']:>6,}[/{target_color}] / "
         f"{TARGET_AGREEMENTS:,} ({target_pct:.1f}%)",
     )
-    db_table.add_row("downloaded ever", f"{stats['downloaded_ever']:>6,}")
+    dl_pct = (stats["downloaded_ever"] / stats["agreements"] * 100) if stats["agreements"] else 0
+    dl_done = stats["undownloaded"] == 0
+    dl_color = "green" if dl_done else "cyan"
+    bl_color = "green" if dl_done else "yellow"
+    db_table.add_row(
+        "downloaded ever",
+        f"[{dl_color}]{stats['downloaded_ever']:>6,}[/{dl_color}] / "
+        f"{stats['agreements']:,} ({dl_pct:.1f}%)",
+    )
+    db_table.add_row(
+        "undownloaded",
+        f"[{bl_color}]{stats['undownloaded']:>6,}[/{bl_color}] [dim]backlog to fetch[/dim]",
+    )
+    db_table.add_row("download rate (5m)", f"{dl_rate_per_min:5.1f} PDFs/min")
+    db_table.add_row("download ETA", dl_eta_text)
     db_table.add_row("on disk now",     f"{stats['on_disk']:>6,}")
     db_table.add_row("pruned",          f"[dim]{stats['pruned']:>6,}[/dim]")
     db_table.add_row("extracted",       f"[green]{stats['extracted']:>6,}[/green]")
-    db_table.add_row("remaining",       f"[yellow]{stats['remaining']:>6,}[/yellow]")
+    db_table.add_row("remaining",       f"[yellow]{stats['remaining']:>6,}[/yellow] [dim]downloaded, to extract[/dim]")
     db_table.add_row("too_large",       f"{stats['too_large']:>6,}")
     db_table.add_row("no_default_named", f"{stats['no_default_named']:>6,}")
     pct = (stats["extracted"] / stats["downloaded_ever"] * 100) if stats["downloaded_ever"] else 0
     db_table.add_row("extract progress", f"{pct:5.1f}% of downloaded ever")
-    db_table.add_row("rate (5m)", f"{rate_per_min:5.1f} PDFs/min")
-    db_table.add_row("ETA", eta_text)
+    db_table.add_row("extract rate (5m)", f"{rate_per_min:5.1f} PDFs/min")
+    db_table.add_row("extract ETA", eta_text)
 
     svc_table = Table.grid(padding=(0, 2))
     svc_table.add_column(justify="right", style="dim")
