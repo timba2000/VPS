@@ -35,11 +35,18 @@ def clean(
     df = df.dropna(axis=1, how="all")
     df = df.dropna(axis=0, how="all")
 
-    if drop_cols:
-        df = df.drop(columns=[c for c in drop_cols if c in df.columns])
-
     if snake_headers:
         df.columns = [normalize_header(c) for c in df.columns]
+        # --drop-cols / --dedupe-on are given the original header names; map them
+        # through the same normalizer so both flags stay consistent (and so
+        # dedupe_on doesn't reference columns that no longer exist -> KeyError).
+        if drop_cols:
+            drop_cols = [normalize_header(c) for c in drop_cols]
+        if dedupe_on:
+            dedupe_on = [normalize_header(c) for c in dedupe_on]
+
+    if drop_cols:
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns])
 
     if dedupe:
         df = df.drop_duplicates(subset=dedupe_on, keep="first")
